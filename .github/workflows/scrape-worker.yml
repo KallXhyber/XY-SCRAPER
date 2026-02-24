@@ -1,0 +1,28 @@
+name: XY-SCRAPER-MODERN-WORKER
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Cek tiap 15 menit (Puppeteer lebih berat, jangan terlalu sering)
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install Dependencies
+        run: |
+          cd worker
+          npm init -y
+          npm install puppeteer firebase
+      
+      - name: Run Puppeteer Scraper
+        env:
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: node worker/scraper.js
