@@ -11,88 +11,52 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 async function runScraper() {
-  console.log("🚀 XY-ULTIMATE SCRAPER STARTING...");
   const q = query(collection(db, "scrape_requests"), where("status", "==", "pending"));
   const querySnapshot = await getDocs(q);
 
-  if (querySnapshot.empty) {
-    console.log("✅ No pending requests.");
-    return;
-  }
+  if (querySnapshot.empty) return;
 
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
   });
 
   for (const document of querySnapshot.docs) {
     const data = document.data();
     const page = await browser.newPage();
     
-    // Penampung data hasil sadapan
-    const networkLogs = {
-      api_endpoints: [],
-      scripts: [],
-      data_responses: []
-    };
+    // Stealth Mode: Set User Agent asli PC lo
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    const networkLogs = { api_endpoints: [], data_responses: [] };
 
     try {
-      // Aktifkan Request Interception
       await page.setRequestInterception(true);
-      
-      page.on('request', request => {
-        const url = request.url();
-        const type = request.resourceType();
-
-        if (type === 'xhr' || type === 'fetch') {
-          networkLogs.api_endpoints.push({ url, method: request.method() });
-        } else if (type === 'script') {
-          networkLogs.scripts.push(url);
-        }
-        request.continue();
-      });
-
-      // Menangkap Response (untuk ambil data JSON murni dari API)
-      page.on('response', async response => {
-        const url = response.url();
-        if (response.request().resourceType() === 'fetch' || response.request().resourceType() === 'xhr') {
+      page.on('request', r => r.continue());
+      page.on('response', async res => {
+        const url = res.url();
+        if (['fetch', 'xhr'].includes(res.request().resourceType())) {
+          networkLogs.api_endpoints.push({ url, status: res.status() });
           try {
-            const json = await response.json();
+            const json = await res.json();
             networkLogs.data_responses.push({ url, data: json });
-          } catch (e) {
-            // Bukan JSON, skip
-          }
+          } catch {}
         }
       });
 
-      console.log(`🌐 Intercepting: ${data.url}`);
       await page.goto(data.url, { waitUntil: 'networkidle0', timeout: 60000 });
 
-      // Ambil metadata dasar
-      const pageInfo = await page.evaluate(() => ({
-        title: document.title,
-        html: document.documentElement.outerHTML.slice(0, 5000) // Ambil cuplikan HTML
-      }));
-
-      // Update Firebase dengan semua log hasil sadapan
       await updateDoc(doc(db, "scrape_requests", document.id), {
-        result: JSON.stringify({
-          info: pageInfo,
-          intercepted: networkLogs
-        }, null, 2),
+        result: JSON.stringify({ intercepted: networkLogs }, null, 2),
         status: "completed"
       });
-
-      console.log(`✅ Deep Scrape Success: ${document.id}`);
+      console.log(`✅ ${data.fileName} Scraped!`);
     } catch (err) {
-      console.error(`❌ Error:`, err.message);
       await updateDoc(doc(db, "scrape_requests", document.id), { status: "failed" });
     } finally {
       await page.close();
     }
   }
-
   await browser.close();
 }
-
 runScraper();
