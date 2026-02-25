@@ -1,69 +1,113 @@
-const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, query, where, getDocs, updateDoc, doc } = require('firebase/firestore');
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth')();
+const { PlaywrightBlocker } = require('@cliqz/adblocker-playwright');
+const fetch = require('cross-fetch');
+const admin = require('firebase-admin');
 
-const firebaseConfig = { apiKey: process.env.FIREBASE_API_KEY, projectId: process.env.FIREBASE_PROJECT_ID };
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// 1. Inisialisasi Firebase Admin (Akses Full ke Firestore)
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
+    })
+  });
+}
+const db = admin.firestore();
+chromium.use(stealth);
 
 async function runScraper() {
-  const q = query(collection(db, "scrape_requests"), where("status", "==", "pending"));
-  const querySnapshot = await getDocs(q);
-  if (querySnapshot.empty) return;
+  console.log("🚀 [XY-SYSTEM] DARK AI ENGINE STARTING...");
+  
+  // Ambil request yang pending
+  const snapshot = await db.collection("scrape_requests").where("status", "==", "pending").get();
+  
+  if (snapshot.empty) {
+    console.log("📭 Gak ada misi hari ini, Raja.");
+    return;
+  }
 
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+  const browser = await chromium.launch({ 
+    headless: true,
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled'
+    ] 
   });
 
-  for (const document of querySnapshot.docs) {
-    const data = document.data();
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 720 }
+    });
+
+    const page = await context.newPage();
+    const blocker = await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch);
+    await blocker.enableBlockingInPage(page);
 
     try {
-      console.log(`📡 MISSION_START: ${data.url}`);
-      await page.goto(data.url, { waitUntil: 'networkidle2', timeout: 60000 });
+      console.log(`📡 ATTACKING TARGET: ${data.url}`);
 
-      // LOGIKA DEWA: Auto-Extract Content (Mirip Cheerio tapi di dalam Browser)
-      const extractedData = await page.evaluate(() => {
-        const results = [];
-        // Mencari elemen artikel secara cerdas
-        const items = document.querySelectorAll('article, .box, .item, .list-item');
+      // Bypass Hardcore: Inject script buat hapus jejak bot
+      await page.addInitScript(() => {
+        delete navigator.__proto__.webdriver;
+        window.chrome = { runtime: {} };
+      });
+
+      await page.goto(data.url, { waitUntil: 'networkidle', timeout: 90000 });
+
+      // Simulasi manusia: Scroll pelan biar konten Next.js/React muncul
+      await page.evaluate(async () => {
+        await new Promise(r => setTimeout(r, 2000));
+        window.scrollBy(0, 500);
+      });
+
+      // EKSTRAKSI DATA DEWA
+      const scrapeResult = await page.evaluate(() => {
+        const items = [];
+        // Mencari selector secara cerdas (Next.js & React support)
+        const elements = document.querySelectorAll('article, [class*="card"], [class*="item"]');
         
-        items.forEach(el => {
-          results.push({
-            title: el.querySelector('h1, h2, h3, a[title]')?.innerText?.trim() || "No Title",
-            link: el.querySelector('a')?.href || "#",
-            img: el.querySelector('img')?.src || "",
-            meta: el.innerText.slice(0, 100).replace(/\n/g, ' ') // Ambil cuplikan teks
+        elements.forEach(el => {
+          items.push({
+            title: el.querySelector('h1, h2, h3, a')?.innerText?.trim() || "No Title",
+            link: el.querySelector('a')?.href || window.location.href,
+            img: el.querySelector('img')?.src || el.querySelector('img')?.dataset?.src || "",
+            snippet: el.innerText.substring(0, 150).replace(/\n/g, ' ')
           });
         });
 
         return {
-          pageTitle: document.title,
-          items: results.slice(0, 20), // Ambil 20 teratas
-          allLinks: Array.from(document.querySelectorAll('a')).map(a => a.href).slice(0, 50)
+          title: document.title,
+          total: items.length,
+          data: items.slice(0, 25), // Ambil 25 teratas
+          scrapedAt: new Date().toISOString()
         };
       });
 
-      // Penamaan Otomatis Script berdasarkan Title
-      const cleanTitle = extractedData.pageTitle.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-
-      await updateDoc(doc(db, "scrape_requests", document.id), {
-        result: JSON.stringify(extractedData, null, 2),
-        fileName: `${cleanTitle}_engine.js`,
-        status: "completed"
+      // Simpan hasil ke Firestore
+      await doc.ref.update({
+        result: scrapeResult,
+        status: "completed",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
-      console.log(`✅ MISSION_SUCCESS: ${cleanTitle}`);
+
+      console.log(`✅ MISSION SUCCESS: ${scrapeResult.title}`);
 
     } catch (err) {
-      console.error("FAILED:", err.message);
-      await updateDoc(doc(db, "scrape_requests", document.id), { status: "failed" });
+      console.error(`❌ MISSION FAILED: ${err.message}`);
+      await doc.ref.update({ status: "failed", error: err.message });
     } finally {
       await page.close();
     }
   }
+
   await browser.close();
+  console.log("🏁 [XY-SYSTEM] SEMUA TARGET BERHASIL DI-RAID.");
 }
+
 runScraper();
