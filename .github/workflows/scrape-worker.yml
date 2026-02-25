@@ -1,28 +1,32 @@
-name: XY-GOD-SCRAPER
+name: Scrape Worker XY
 
 on:
-  repository_dispatch:
-    types: [trigger_scraper] # Supaya bisa dipicu instan dari Web!
-  workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/30 * * * *' # Jalan tiap 30 menit
+  workflow_dispatch: # Biar bisa di-klik manual
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Node
+      
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-      - name: Install
+          
+      - name: Install Dependencies
         run: |
           cd worker
-          npm init -y
-          npm install puppeteer firebase
-      - name: Run
+          npm install playwright-extra puppeteer-extra-plugin-stealth @cliqz/adblocker-playwright axios firebase-admin
+          npx playwright install chromium
+          
+      - name: Run Annihilator Engine
+        run: |
+          cd worker
+          node scraper.js
         env:
-          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: node worker/scraper.js
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
